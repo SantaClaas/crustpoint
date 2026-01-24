@@ -4,12 +4,14 @@ Experimenting with the xteink 4 ereader and rust
 
 ## Resources
 
-- https://github.com/CidVonHighwind/xteink-x4-sample
-- https://youtu.be/dxgufYRcNDg
-- https://docs.espressif.com/projects/rust/book/
-- https://github.com/daveallie/crosspoint-reader
-- https://xteink.dve.al/
-- https://thelastoutpostworkshop.github.io/ESPConnect/ Great GUI tool
+- [ESP32 embedded Rust setup explained (Video)](https://youtu.be/dxgufYRcNDg)
+- [The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/)
+- Repositories
+  - [CrossPoint Reader](https://github.com/daveallie/crosspoint-reader)
+  - [Xteink X4 Sample](https://github.com/CidVonHighwind/xteink-x4-sample)
+- Tools
+  - [Xteink Flash Tools](https://xteink.dve.al/)
+  - [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)
 
 ## Backup
 
