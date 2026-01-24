@@ -8,6 +8,7 @@ Experimenting with the xteink 4 ereader and rust
 - https://youtu.be/dxgufYRcNDg
 - https://docs.espressif.com/projects/rust/book/
 - https://github.com/daveallie/crosspoint-reader
+- https://xteink.dve.al/
 - https://thelastoutpostworkshop.github.io/ESPConnect/ Great GUI tool
 
 ## Backup
