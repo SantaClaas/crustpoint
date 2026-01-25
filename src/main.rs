@@ -13,16 +13,12 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{self, InputConfig, Level, OutputConfig};
 use esp_hal::timer::timg::TimerGroup;
 use {esp_backtrace as _, esp_println as _};
 
 use crate::eink_display::EinkDisplay;
 
 extern crate alloc;
-
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -58,18 +54,6 @@ async fn main(spawner: Spawner) {
 
     info!("Embassy initialized!");
 
-    // Radio setup
-    // let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    // let (mut _wifi_controller, _interfaces) =
-    //     esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
-    //         .expect("Failed to initialize Wi-Fi controller");
-    // // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    // let transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap();
-    // let ble_controller = ExternalController::<_, 1>::new(transport);
-    // let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-    //     HostResources::new();
-    // let _stack = trouble_host::new(ble_controller, &mut resources);
-
     // Set up epaper display
     // Custom pins for XteinkX4, not hardware SPI defaults
     // SPI Clock (SCLK = serial clock)
@@ -86,7 +70,7 @@ async fn main(spawner: Spawner) {
     let busy = peripherals.GPIO6;
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
-    let mut display = EinkDisplay::initialize(
+    let _display = EinkDisplay::initialize(
         peripherals.SPI2,
         serial_clock,
         master_in_slave_out,
