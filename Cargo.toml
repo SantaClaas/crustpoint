@@ -1,12 +1,12 @@
 [package]
 edition = "2024"
-name = "my-esp-project"
+name = "crustpoint"
 rust-version = "1.88"
 version = "0.1.0"
 
 [[bin]]
-name = "my-esp-project"
-path = "./src/bin/main.rs"
+name = "crustpoint"
+path = "./src/main.rs"
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32c3", "unstable"] }
@@ -69,6 +69,7 @@ trouble-host = { version = "0.5.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell = "2.1.1"
+embedded-hal = "1.0.0"
 
 
 [profile.dev]

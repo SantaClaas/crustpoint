@@ -9,6 +9,7 @@ Experimenting with the xteink 4 ereader and rust
 - Repositories
   - [CrossPoint Reader](https://github.com/daveallie/crosspoint-reader)
   - [Xteink X4 Sample](https://github.com/CidVonHighwind/xteink-x4-sample)
+  - [Ariel-OS fork x4 example](https://github.com/juicecultus/ariel-os/blob/a2816b156b632b2633801df45d69c8fe9dde500c/examples/x4-launcher/src/ssd1677.rs)
 - Tools
   - [Xteink Flash Tools](https://xteink.dve.al/)
   - [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)
