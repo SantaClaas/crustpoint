@@ -9,7 +9,7 @@
 
 mod eink_display;
 
-use defmt::info;
+use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
@@ -70,7 +70,7 @@ async fn main(spawner: Spawner) {
     let busy = peripherals.GPIO6;
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
-    let _display = EinkDisplay::initialize(
+    let mut display = EinkDisplay::initialize(
         peripherals.SPI2,
         serial_clock,
         master_in_slave_out,
@@ -80,7 +80,18 @@ async fn main(spawner: Spawner) {
         data_command,
         busy,
     )
-    .await;
+    .await
+    .inspect_err(|_error| error!("Error initializing display"))
+    .expect("Failed to initialize display");
+
+    display
+        .display(
+            eink_display::RefreshMode::Full,
+            &[0xFF; EinkDisplay::BUFFER_SIZE],
+        )
+        .await
+        .inspect_err(|error| error!("Error displaying {:?}", defmt::Debug2Format(&error)))
+        .expect("Failed to display");
 
     // Task test
     spawner.must_spawn(hello_world());

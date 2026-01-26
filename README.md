@@ -4,6 +4,8 @@ Experimenting with the xteink 4 ereader and rust
 
 ## Resources
 
+I did not build this from scratch. This is based on the previous and future work of others including:
+
 - [ESP32 embedded Rust setup explained (Video)](https://youtu.be/dxgufYRcNDg)
 - [The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/)
 - Repositories
@@ -13,6 +15,8 @@ Experimenting with the xteink 4 ereader and rust
 - Tools
   - [Xteink Flash Tools](https://xteink.dve.al/)
   - [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)
+- Crates
+  - [Embedded graphics](https://crates.io/crates/embedded_graphics)
 
 ## Backup
 

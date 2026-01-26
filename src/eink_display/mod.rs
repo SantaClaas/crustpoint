@@ -1,33 +1,22 @@
+use crate::eink_display::error::{
+    CreateError, DisplayError, InitializationError, InitializeControllerError, RefreshError,
+    SendCommandError, SendDataError, SetRamAreaError, WaitForBusyTimeoutError,
+};
 use defmt::info;
-use embassy_time::{Duration, TimeoutError, Timer, with_timeout};
+use embassy_time::{Duration, Timer, with_timeout};
 use esp_hal::{
     Async,
-    dma::{DmaBufError, DmaChannelFor, DmaRxBuf, DmaTxBuf},
+    dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf},
     dma_buffers,
     gpio::{
         Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin,
         interconnect::PeripheralOutput,
     },
-    spi::{
-        self,
-        master::{AnySpi, Config, Instance, Spi, SpiDmaBus},
-    },
+    spi::master::{AnySpi, Config, Instance, Spi, SpiDmaBus},
     time::Rate,
 };
 
-const DISPLAY_WIDTH: u16 = 800;
-const DISPLAY_HEIGHT: u16 = 480;
-const DISPLAY_WIDTH_BYTES: usize = {
-    // There is no div_exact yet
-    assert!(
-        DISPLAY_WIDTH % 8 == 0,
-        "Display width must be a multiple of 8"
-    );
-
-    DISPLAY_WIDTH.strict_div(8) as usize
-};
-
-const BUFFER_SIZE: usize = DISPLAY_WIDTH_BYTES.strict_mul(DISPLAY_HEIGHT as usize);
+mod error;
 
 #[derive(Debug, defmt::Format)]
 #[repr(u8)]
@@ -46,56 +35,27 @@ enum Command {
     SetRamXCounter = 0x4E,
     SetRamYCounter = 0x4F,
     AutoWriteBwRam = 0x46,
+    AutoWriteRedRam = 0x47,
+    WriteBwRam = 0x24,
+    WriteRedRam = 0x26,
+
+    // Display update and refresh
+    DisplayUpdateControl1 = 0x21,
+    DisplayUpdateControl2 = 0x22,
+    MasterActivation = 0x20,
+
+    // LUT and voltage settings
+    /// Write temperature
+    WriteTemperature = 0x1A,
 }
 
-#[derive(Debug, thiserror::Error, defmt::Format)]
-pub(super) enum CreateError {
-    #[error("Failed to create direct memory access (DMA) receive channel buffer")]
-    DmaReceiveBuffer(DmaBufError),
-    #[error("Failed to create direct memory access (DMA) transmit channel buffer")]
-    DmaTransmitBuffer(DmaBufError),
-    #[error("Failed to create SPI bus")]
-    SpiBus(#[from] spi::master::ConfigError),
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Failed to send command")]
-pub(super) struct SendCommandError(spi::Error);
-
-#[derive(Debug, thiserror::Error)]
-#[error("Failed to send data")]
-pub(super) struct SendDataError(spi::Error);
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum SetRamAreaError {
-    #[error("Failed to send command")]
-    SendCommand(#[from] SendCommandError),
-    #[error("Failed to send data")]
-    SendData(#[from] SendDataError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum InitializeControllerError {
-    #[error("Failed to send command")]
-    SendCommand(#[from] SendCommandError),
-    #[error("Failed to send data")]
-    SendData(#[from] SendDataError),
-    #[error("Timed out waiting for busy")]
-    WaitForBusy(#[from] WaitForBusyTimeoutError),
-    #[error("Failed to set RAM area")]
-    SetRamArea(#[from] SetRamAreaError),
-}
-
-#[derive(Debug, thiserror::Error, defmt::Format)]
-#[error("Timeout waiting for busy")]
-pub(super) struct WaitForBusyTimeoutError(TimeoutError);
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum InitializationError {
-    #[error("Failed to create e-ink display driver instance")]
-    Create(#[from] CreateError),
-    #[error("Failed to initialize e-ink display controller")]
-    InitializeController(#[from] InitializeControllerError),
+#[derive(Debug, defmt::Format)]
+#[repr(u8)]
+enum ControlMode {
+    /// Normal mode - compare RED vs BW for partial
+    Normal = 0x00,
+    /// Bypass RED RAM (treat as 0) - for full refresh
+    BypassRed = 0x40,
 }
 
 pub(super) struct EinkDisplay<'d> {
@@ -103,9 +63,32 @@ pub(super) struct EinkDisplay<'d> {
     reset: Output<'d>,
     data_command: Output<'d>,
     busy: Input<'d>,
+    is_screen_on: bool,
+    is_custom_lut_active: bool,
+}
+
+pub(super) enum RefreshMode {
+    Fast,
+    Full,
+    HalfRefresh,
 }
 
 impl<'d> EinkDisplay<'d> {
+    const DISPLAY_WIDTH: u16 = 800;
+    const DISPLAY_HEIGHT: u16 = 480;
+    const DISPLAY_WIDTH_BYTES: usize = {
+        // There is no div_exact yet
+        assert!(
+            Self::DISPLAY_WIDTH % 8 == 0,
+            "Display width must be a multiple of 8"
+        );
+
+        Self::DISPLAY_WIDTH.strict_div(8) as usize
+    };
+
+    pub(crate) const BUFFER_SIZE: usize =
+        Self::DISPLAY_WIDTH_BYTES.strict_mul(Self::DISPLAY_HEIGHT as usize);
+
     fn new(
         spi: impl Instance + 'd,
         serial_clock: impl PeripheralOutput<'d>,
@@ -118,7 +101,7 @@ impl<'d> EinkDisplay<'d> {
     ) -> Result<Self, CreateError> {
         // DMA = Direct Memory Access
         let (receive_buffer, receive_descriptor, transmit_buffer, transmit_descriptors) =
-            dma_buffers!(BUFFER_SIZE);
+            dma_buffers!(32_000);
         let direct_memory_access_receive_buffer = DmaRxBuf::new(receive_descriptor, receive_buffer)
             .map_err(CreateError::DmaReceiveBuffer)?;
         let direct_memory_access_transmit_buffer =
@@ -149,11 +132,14 @@ impl<'d> EinkDisplay<'d> {
         let data_command = Output::new(data_command, Level::High, OutputConfig::default());
         let busy = Input::new(busy, InputConfig::default());
 
+        info!("Size: {}", Self::BUFFER_SIZE);
         Ok(Self {
             spi,
             reset,
             data_command,
             busy,
+            is_screen_on: true,
+            is_custom_lut_active: false,
         })
     }
 
@@ -181,17 +167,21 @@ impl<'d> EinkDisplay<'d> {
         Ok(())
     }
 
-    async fn send_data(&mut self, data: &[u8]) -> Result<(), SendDataError> {
-        info!("Sending data: {:?}", data);
+    async fn send_data(&mut self, data: impl AsRef<[u8]>) -> Result<(), SendDataError> {
+        info!("Sending data: {:?}", data.as_ref().len());
         // Set into data mode
         self.data_command.set_high();
-        self.spi.write_async(data).await.map_err(SendDataError)?;
+        self.spi
+            .write_async(data.as_ref())
+            .await
+            .map_err(SendDataError)?;
         info!("Data sent");
         Ok(())
     }
 
     async fn wait_for_busy(&mut self) -> Result<(), WaitForBusyTimeoutError> {
-        with_timeout(Duration::from_millis(10_000), self.busy.wait_for_low())
+        info!("Waiting for low. Current: {}", self.busy.level());
+        with_timeout(Duration::from_millis(100_000), self.busy.wait_for_low())
             .await
             .map_err(WaitForBusyTimeoutError)
     }
@@ -208,7 +198,7 @@ impl<'d> EinkDisplay<'d> {
 
         //TODO overflow safety
         // Reverse Y coordinate (gates are reversed on this display)
-        let y = DISPLAY_HEIGHT - y - height;
+        let y = Self::DISPLAY_HEIGHT - y - height;
 
         self.send_command(Command::DataEntryMode).await?;
         self.send_data(&[DATA_ENTRY_X_INC_Y_DEC]).await?;
@@ -252,7 +242,7 @@ impl<'d> EinkDisplay<'d> {
         Ok(())
     }
 
-    pub(super) async fn initialize_controller(&mut self) -> Result<(), InitializeControllerError> {
+    async fn initialize_controller(&mut self) -> Result<(), InitializeControllerError> {
         info!("Initializing SSD1677 controller");
 
         // Soft reset
@@ -266,6 +256,7 @@ impl<'d> EinkDisplay<'d> {
 
         // Booster soft-start control (GDEQ0426T82 specific values)
         self.send_command(Command::BoosterSoftStart).await?;
+        //TODO combine to one slice
         self.send_data(&[0xAE]).await?;
         self.send_data(&[0xC7]).await?;
         self.send_data(&[0xC3]).await?;
@@ -276,9 +267,9 @@ impl<'d> EinkDisplay<'d> {
         // Driver output control: set display height (480) and scan direction
         self.send_command(Command::DriverOutputControl).await?;
         //TODO safer casting
-        self.send_data(&[((DISPLAY_HEIGHT - 1) % 256) as u8])
+        self.send_data(&[((Self::DISPLAY_HEIGHT - 1) % 256) as u8])
             .await?;
-        self.send_data(&[((DISPLAY_HEIGHT - 1) / 256) as u8])
+        self.send_data(&[((Self::DISPLAY_HEIGHT - 1) / 256) as u8])
             .await?;
         self.send_data(&[0x02]).await?;
 
@@ -287,12 +278,17 @@ impl<'d> EinkDisplay<'d> {
         self.send_data(&[0x01]).await?;
 
         // Set up full screen RAM area
-        self.set_ram_area(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+        self.set_ram_area(0, 0, Self::DISPLAY_WIDTH, Self::DISPLAY_HEIGHT)
             .await?;
 
         info!("Clearing RAM buffers");
         // Auto write BW RAM
         self.send_command(Command::AutoWriteBwRam).await?;
+        self.send_data(&[0xF7]).await?;
+        self.wait_for_busy().await?;
+
+        // Auto write Red RAM
+        self.send_command(Command::AutoWriteRedRam).await?;
         self.send_data(&[0xF7]).await?;
         self.wait_for_busy().await?;
 
@@ -329,5 +325,129 @@ impl<'d> EinkDisplay<'d> {
         info!("E-ink display driver initialized");
 
         Ok(this)
+    }
+
+    async fn refresh(
+        &mut self,
+        mode: RefreshMode,
+        turn_screen_off: bool,
+    ) -> Result<(), RefreshError> {
+        // Configure Display Update Control 1
+        self.send_command(Command::DisplayUpdateControl1).await?;
+        // Configure buffer comparison mode
+        self.send_data(&[match mode {
+            RefreshMode::Fast => ControlMode::Normal,
+            RefreshMode::Full | RefreshMode::HalfRefresh => ControlMode::BypassRed,
+        } as u8])
+            .await?;
+
+        // (From crosspoint/open xteink community sdk)
+        // best guess at display mode bits:
+        // bit | hex | name                    | effect
+        // ----+-----+--------------------------+-------------------------------------------
+        // 7   | 80  | CLOCK_ON                | Start internal oscillator
+        // 6   | 40  | ANALOG_ON               | Enable analog power rails (VGH/VGL drivers)
+        // 5   | 20  | TEMP_LOAD               | Load temperature (internal or I2C)
+        // 4   | 10  | LUT_LOAD                | Load waveform LUT
+        // 3   | 08  | MODE_SELECT             | Mode 1/2
+        // 2   | 04  | DISPLAY_START           | Run display
+        // 1   | 02  | ANALOG_OFF_PHASE        | Shutdown step 1 (undocumented)
+        // 0   | 01  | CLOCK_OFF               | Disable internal oscillato
+
+        // Select appropriate display mode based on refresh type
+        let mut display_mode = 0b0000_0000u8;
+
+        if !self.is_screen_on {
+            // Set CLOCK_ON and ANALOG_ON bits
+            self.is_screen_on = true;
+            display_mode |= 0b1100_0000
+        }
+
+        if turn_screen_off {
+            self.is_screen_on = false;
+            // Set ANALOG_OFF_PHASE and CLOCK_OFF bits
+            display_mode |= 0b000_00011;
+        }
+
+        match mode {
+            RefreshMode::Fast => {
+                display_mode |= if self.is_custom_lut_active {
+                    0b0000_1100
+                } else {
+                    0b0001_1100
+                };
+            }
+            RefreshMode::Full => {
+                display_mode |= 0b0011_0100;
+            }
+            RefreshMode::HalfRefresh => {
+                // Write high temp to the register for a faster refresh
+                self.send_command(Command::WriteTemperature).await?;
+                self.send_data(&[0x5A]).await?;
+                display_mode |= 0b1101_0100;
+            }
+        }
+
+        // Power on and refresh display
+        self.send_command(Command::DisplayUpdateControl2).await?;
+        self.send_data(&[display_mode]).await?;
+
+        self.send_command(Command::MasterActivation).await?;
+
+        // Wait for display to finish updating
+        self.wait_for_busy().await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn display(
+        &mut self,
+        mut refresh_mode: RefreshMode,
+        frame_buffer: &[u8; EinkDisplay::BUFFER_SIZE],
+    ) -> Result<(), DisplayError> {
+        if !self.is_screen_on {
+            // Force half refresh if screen is off
+            refresh_mode = RefreshMode::HalfRefresh;
+        }
+
+        // Set up full screen RAM area
+        self.set_ram_area(0, 0, Self::DISPLAY_WIDTH, Self::DISPLAY_HEIGHT)
+            .await?;
+
+        match refresh_mode {
+            RefreshMode::Fast => {
+                // For fast refresh, write to BW buffer only
+                self.send_command(Command::WriteBwRam).await?;
+                self.data_command.set_high();
+                //TODO same as send_data but I have borrowing skill issues
+                //TODO put SPI send stuff in own struct?
+                self.spi
+                    .write_async(frame_buffer)
+                    .await
+                    .map_err(SendDataError)?;
+            }
+            RefreshMode::HalfRefresh | RefreshMode::Full => {
+                // For full refresh, write to both buffers before refresh
+                self.send_command(Command::WriteBwRam).await?;
+                self.data_command.set_high();
+                //TODO same as send_data but I have borrowing skill issues
+                self.spi
+                    .write_async(frame_buffer)
+                    .await
+                    .map_err(SendDataError)?;
+
+                self.send_command(Command::WriteRedRam).await?;
+                self.data_command.set_high();
+                //TODO same as send_data but I have borrowing skill issues
+                self.spi
+                    .write_async(frame_buffer)
+                    .await
+                    .map_err(SendDataError)?;
+            }
+        }
+
+        self.refresh(refresh_mode, false).await?;
+
+        Ok(())
     }
 }
