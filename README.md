@@ -12,6 +12,7 @@ I did not build this from scratch. This is based on the previous and future work
   - [CrossPoint Reader](https://github.com/daveallie/crosspoint-reader)
   - [Xteink X4 Sample](https://github.com/CidVonHighwind/xteink-x4-sample)
   - [Ariel-OS fork x4 example](https://github.com/juicecultus/ariel-os/blob/a2816b156b632b2633801df45d69c8fe9dde500c/examples/x4-launcher/src/ssd1677.rs)
+  - [Xteink X4 sample rust](https://github.com/HookedBehemoth/TrustyReader/)
 - Tools
   - [Xteink Flash Tools](https://xteink.dve.al/)
   - [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)

@@ -130,7 +130,10 @@ impl<'d> EinkDisplay<'d> {
         // Set up GPIO pins
         let reset = Output::new(reset, Level::Low, OutputConfig::default());
         let data_command = Output::new(data_command, Level::High, OutputConfig::default());
-        let busy = Input::new(busy, InputConfig::default());
+        let busy = Input::new(
+            busy,
+            InputConfig::default().with_pull(esp_hal::gpio::Pull::Down),
+        );
 
         info!("Size: {}", Self::BUFFER_SIZE);
         Ok(Self {
@@ -138,7 +141,7 @@ impl<'d> EinkDisplay<'d> {
             reset,
             data_command,
             busy,
-            is_screen_on: true,
+            is_screen_on: false,
             is_custom_lut_active: false,
         })
     }
@@ -184,6 +187,11 @@ impl<'d> EinkDisplay<'d> {
         with_timeout(Duration::from_millis(100_000), self.busy.wait_for_low())
             .await
             .map_err(WaitForBusyTimeoutError)
+        // while self.busy.is_high() {
+        //     info!("Waiting for low. Current: {}", self.busy.level());
+        //     Timer::after_millis(100).await;
+        // }
+        // Ok(())
     }
 
     async fn set_ram_area(
@@ -335,11 +343,14 @@ impl<'d> EinkDisplay<'d> {
         // Configure Display Update Control 1
         self.send_command(Command::DisplayUpdateControl1).await?;
         // Configure buffer comparison mode
-        self.send_data(&[match mode {
-            RefreshMode::Fast => ControlMode::Normal,
-            RefreshMode::Full | RefreshMode::HalfRefresh => ControlMode::BypassRed,
-        } as u8])
-            .await?;
+        self.send_data(&[
+            match mode {
+                RefreshMode::Fast => ControlMode::Normal,
+                RefreshMode::Full | RefreshMode::HalfRefresh => ControlMode::BypassRed,
+            } as u8,
+            0x00,
+        ])
+        .await?;
 
         // (From crosspoint/open xteink community sdk)
         // best guess at display mode bits:
@@ -355,30 +366,38 @@ impl<'d> EinkDisplay<'d> {
         // 0   | 01  | CLOCK_OFF               | Disable internal oscillato
 
         // Select appropriate display mode based on refresh type
-        let mut display_mode = 0b0000_0000u8;
+        // let mut display_mode = 0b0000_0000u8;
+        let mut display_mode = 0x00;
 
         if !self.is_screen_on {
+            info!("Turning screen on");
             // Set CLOCK_ON and ANALOG_ON bits
             self.is_screen_on = true;
-            display_mode |= 0b1100_0000
+            // display_mode |= 0b1100_0000
+            display_mode |= 0xC0;
         }
 
         if turn_screen_off {
+            info!("Turning screen off");
             self.is_screen_on = false;
             // Set ANALOG_OFF_PHASE and CLOCK_OFF bits
-            display_mode |= 0b000_00011;
+            // display_mode |= 0b000_00011;
+            display_mode |= 0x03;
         }
 
         match mode {
             RefreshMode::Fast => {
                 display_mode |= if self.is_custom_lut_active {
-                    0b0000_1100
+                    // 0b0000_1100
+                    0x0C
                 } else {
-                    0b0001_1100
+                    // 0b0001_1100
+                    0x1C
                 };
             }
             RefreshMode::Full => {
-                display_mode |= 0b0011_0100;
+                // display_mode |= 0b0011_0100;
+                display_mode |= 0x34;
             }
             RefreshMode::HalfRefresh => {
                 // Write high temp to the register for a faster refresh
@@ -392,6 +411,7 @@ impl<'d> EinkDisplay<'d> {
         self.send_command(Command::DisplayUpdateControl2).await?;
         self.send_data(&[display_mode]).await?;
 
+        info!("Is busy? {}", self.busy.level());
         self.send_command(Command::MasterActivation).await?;
 
         // Wait for display to finish updating
