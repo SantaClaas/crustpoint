@@ -1,6 +1,6 @@
 use crate::eink_display::error::{
-    CreateError, DisplayError, InitializationError, InitializeControllerError, RefreshError,
-    SendCommandError, SendDataError, SetRamAreaError, WaitForBusyTimeoutError,
+    CreateError, DisplayError, EnterDeepSleepError, InitializationError, InitializeControllerError,
+    RefreshError, SendCommandError, SendDataError, SetRamAreaError, WaitForBusyTimeoutError,
 };
 use defmt::info;
 use embassy_time::{Duration, Timer, with_timeout};
@@ -47,6 +47,9 @@ enum Command {
     // LUT and voltage settings
     /// Write temperature
     WriteTemperature = 0x1A,
+
+    // Power management
+    DeepSleep = 0x10,
 }
 
 #[derive(Debug, defmt::Format)]
@@ -61,6 +64,9 @@ enum ControlMode {
 pub(super) struct EinkDisplay<'d> {
     spi: SpiDmaBus<'d, Async>,
     reset: Output<'d>,
+    /// Based on usage this pin is used to select between data and command mode.
+    /// When set to low, the pin is in command mode to send commands.
+    /// When set to high, the pin is in data mode to send data.
     data_command: Output<'d>,
     busy: Input<'d>,
     is_screen_on: bool,
@@ -187,11 +193,6 @@ impl<'d> EinkDisplay<'d> {
         with_timeout(Duration::from_millis(100_000), self.busy.wait_for_low())
             .await
             .map_err(WaitForBusyTimeoutError)
-        // while self.busy.is_high() {
-        //     info!("Waiting for low. Current: {}", self.busy.level());
-        //     Timer::after_millis(100).await;
-        // }
-        // Ok(())
     }
 
     async fn set_ram_area(
@@ -381,23 +382,23 @@ impl<'d> EinkDisplay<'d> {
             info!("Turning screen off");
             self.is_screen_on = false;
             // Set ANALOG_OFF_PHASE and CLOCK_OFF bits
-            // display_mode |= 0b000_00011;
-            display_mode |= 0x03;
+            // 0x03;
+            display_mode |= 0b000_00011;
         }
 
         match mode {
             RefreshMode::Fast => {
                 display_mode |= if self.is_custom_lut_active {
-                    // 0b0000_1100
-                    0x0C
+                    // 0x0C
+                    0b0000_1100
                 } else {
-                    // 0b0001_1100
-                    0x1C
+                    // 0x1C
+                    0b0001_1100
                 };
             }
             RefreshMode::Full => {
-                // display_mode |= 0b0011_0100;
-                display_mode |= 0x34;
+                // 0x34;
+                display_mode |= 0b0011_0100;
             }
             RefreshMode::HalfRefresh => {
                 // Write high temp to the register for a faster refresh
@@ -439,35 +440,47 @@ impl<'d> EinkDisplay<'d> {
                 // For fast refresh, write to BW buffer only
                 self.send_command(Command::WriteBwRam).await?;
                 self.data_command.set_high();
-                //TODO same as send_data but I have borrowing skill issues
-                //TODO put SPI send stuff in own struct?
-                self.spi
-                    .write_async(frame_buffer)
-                    .await
-                    .map_err(SendDataError)?;
+
+                self.send_data(frame_buffer).await?;
             }
             RefreshMode::HalfRefresh | RefreshMode::Full => {
                 // For full refresh, write to both buffers before refresh
                 self.send_command(Command::WriteBwRam).await?;
-                self.data_command.set_high();
-                //TODO same as send_data but I have borrowing skill issues
-                self.spi
-                    .write_async(frame_buffer)
-                    .await
-                    .map_err(SendDataError)?;
+                self.send_data(frame_buffer).await?;
 
                 self.send_command(Command::WriteRedRam).await?;
-                self.data_command.set_high();
-                //TODO same as send_data but I have borrowing skill issues
-                self.spi
-                    .write_async(frame_buffer)
-                    .await
-                    .map_err(SendDataError)?;
+                self.send_data(frame_buffer).await?;
             }
         }
 
         self.refresh(refresh_mode, false).await?;
 
+        Ok(())
+    }
+
+    pub(crate) async fn enter_deep_sleep(&mut self) -> Result<(), EnterDeepSleepError> {
+        info!("Preparing display to enter deep sleep");
+        // First, power down the display properly
+        // This shuts down the analog power rails and clock
+        if self.is_screen_on {
+            self.send_command(Command::DisplayUpdateControl1).await?;
+            self.send_data(&[ControlMode::BypassRed as u8]).await?;
+
+            self.send_command(Command::DisplayUpdateControl2).await?;
+            // Set ANALOG_OFF_PHASE (bit 1) and CLOCK_OFF (bit 0)
+            // 0x03
+            self.send_data(&[0b0000_0011]).await?;
+
+            // Wait for the power-down sequence to complete
+            self.wait_for_busy().await?;
+
+            self.is_screen_on = false;
+        }
+
+        // Now enter deep sleep mode
+        self.send_command(Command::DeepSleep).await?;
+        // Enter deep sleep
+        self.send_data(&[0x01]).await?;
         Ok(())
     }
 }

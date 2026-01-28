@@ -72,3 +72,13 @@ pub(crate) enum DisplayError {
     #[error("Failed to refresh display")]
     Refresh(#[from] RefreshError),
 }
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EnterDeepSleepError {
+    #[error("Failed to send command")]
+    SendCommand(#[from] SendCommandError),
+    #[error("Failed to send data")]
+    SendData(#[from] SendDataError),
+    #[error("Failed to wait for busy")]
+    WaitForBusy(#[from] WaitForBusyTimeoutError),
+}

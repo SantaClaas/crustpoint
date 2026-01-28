@@ -37,7 +37,7 @@ async fn hello_world() {
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
 #[esp_rtos::main]
-async fn main(spawner: Spawner) {
+async fn main(_spawner: Spawner) {
     // generator version: 1.2.0
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -93,8 +93,19 @@ async fn main(spawner: Spawner) {
         .inspect_err(|error| error!("Error displaying {:?}", defmt::Debug2Format(&error)))
         .expect("Failed to display");
 
+    display
+        .enter_deep_sleep()
+        .await
+        .inspect_err(|error| {
+            error!(
+                "Error starting deep sleep {:?}",
+                defmt::Debug2Format(&error)
+            )
+        })
+        .expect("Failed to start deep sleep");
+
     // Task test
-    spawner.must_spawn(hello_world());
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
+    info!("COMPLETED");
 }
