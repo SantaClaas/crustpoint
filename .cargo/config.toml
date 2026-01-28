@@ -1,5 +1,6 @@
 [target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c3 --log-format defmt"
+# Parition table can also be converted to .bin using espflash and set in espflash.toml
+runner = "espflash flash --monitor --chip esp32c3 --log-format defmt --partition-table ./partition-table.csv"
 
 [env]
 DEFMT_LOG="info"

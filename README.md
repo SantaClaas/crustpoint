@@ -18,6 +18,7 @@ I did not build this from scratch. This is based on the previous and future work
   - [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)
 - Crates
   - [Embedded graphics](https://crates.io/crates/embedded_graphics)
+- [Reading/Writing partition tables](https://docs.espressif.com/projects/rust/esp-bootloader-esp-idf/0.3.0/esp32c2/esp_bootloader_esp_idf/partitions/index.html)
 
 ## Backup
 
