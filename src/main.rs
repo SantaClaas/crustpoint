@@ -59,7 +59,7 @@ async fn main(_spawner: Spawner) {
     // SPI Clock (SCLK = serial clock)
     let serial_clock = peripherals.GPIO8;
     // SPI Master Out Slave In (MOSI)
-    let master_in_slave_out = peripherals.GPIO10;
+    let master_out_slave_in = peripherals.GPIO10;
     // Chip Select (CS)
     let chip_select = peripherals.GPIO21;
     // Data/Command (DC)
@@ -73,7 +73,7 @@ async fn main(_spawner: Spawner) {
     let mut display = EinkDisplay::initialize(
         peripherals.SPI2,
         serial_clock,
-        master_in_slave_out,
+        master_out_slave_in,
         chip_select,
         direct_memory_access_channel,
         reset,

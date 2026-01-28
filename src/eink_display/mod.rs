@@ -98,7 +98,7 @@ impl<'d> EinkDisplay<'d> {
     fn new(
         spi: impl Instance + 'd,
         serial_clock: impl PeripheralOutput<'d>,
-        master_in_slave_out: impl PeripheralOutput<'d>,
+        master_out_slave_in: impl PeripheralOutput<'d>,
         chip_select: impl PeripheralOutput<'d>,
         direct_memory_access_channel: impl DmaChannelFor<AnySpi<'d>>,
         reset: impl OutputPin + 'd,
@@ -123,7 +123,8 @@ impl<'d> EinkDisplay<'d> {
                 .with_read_bit_order(esp_hal::spi::BitOrder::MsbFirst), // .with_write_bit_order(esp_hal::spi::BitOrder::MsbFirst)
         )?
         .with_sck(serial_clock)
-        .with_mosi(master_in_slave_out)
+        .with_mosi(master_out_slave_in)
+        // MISO might be pin 7? https://github.com/juicecultus/ariel-os/blob/a2816b156b632b2633801df45d69c8fe9dde500c/examples/x4-launcher/src/main.rs#L943
         // .with_miso(todo!("Not defined in XteinkX4 screen spec"))
         .with_cs(chip_select)
         .with_dma(direct_memory_access_channel)
@@ -308,7 +309,7 @@ impl<'d> EinkDisplay<'d> {
     pub(super) async fn initialize(
         spi: impl Instance + 'd,
         serial_clock: impl PeripheralOutput<'d>,
-        master_in_slave_out: impl PeripheralOutput<'d>,
+        master_out_slave_in: impl PeripheralOutput<'d>,
         chip_select: impl PeripheralOutput<'d>,
         direct_memory_access_channel: impl DmaChannelFor<AnySpi<'d>>,
         reset: impl OutputPin + 'd,
@@ -319,7 +320,7 @@ impl<'d> EinkDisplay<'d> {
         let mut this = Self::new(
             spi,
             serial_clock,
-            master_in_slave_out,
+            master_out_slave_in,
             chip_select,
             direct_memory_access_channel,
             reset,
@@ -477,6 +478,7 @@ impl<'d> EinkDisplay<'d> {
             self.is_screen_on = false;
         }
 
+        info!("Entering deep sleep");
         // Now enter deep sleep mode
         self.send_command(Command::DeepSleep).await?;
         // Enter deep sleep
