@@ -13,8 +13,9 @@ mod spi;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 use esp_hal::gpio::{self, Input, InputConfig};
-use esp_hal::peripherals::{GPIO3, LPWR};
+use esp_hal::peripherals::{ADC1, GPIO1, GPIO2, GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
 use esp_hal::system::Cpu;
@@ -118,6 +119,21 @@ async fn handle_power_button(
     real_time_control.sleep_deep(&[&rtcio]);
 }
 
+#[embassy_executor::task]
+async fn handle_buttons(adc: ADC1<'static>, button_1: GPIO1<'static>, button_2: GPIO2<'static>) {
+    let mut configuration = AdcConfig::new();
+    let mut pin_1 = configuration.enable_pin(button_1, Attenuation::_11dB);
+    let mut pin_2 = configuration.enable_pin(button_2, Attenuation::_11dB);
+    let mut adc = Adc::new(adc, configuration).into_async();
+
+    loop {
+        let value_1 = adc.read_oneshot(&mut pin_1).await;
+        let value_2 = adc.read_oneshot(&mut pin_2).await;
+        info!("ADC value read: {} {}", value_1, value_2);
+        Timer::after_secs(1).await;
+    }
+}
+
 /// Just a convenience replacement for main to be able to return errors
 async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     let reset_reason = reset_reason(Cpu::ProCpu);
@@ -158,6 +174,14 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     let reset = peripherals.GPIO5;
     // Busy
     let busy = peripherals.GPIO6;
+
+    // Buttons
+
+    spawner.spawn(handle_buttons(
+        peripherals.ADC1,
+        peripherals.GPIO1,
+        peripherals.GPIO2,
+    ))?;
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
     let sd_card_chip_select = peripherals.GPIO12;
