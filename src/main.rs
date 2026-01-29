@@ -8,10 +8,14 @@
 #![deny(clippy::large_stack_frames)]
 
 mod eink_display;
+mod spi;
+
+use core::error;
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use embedded_hal_async::spi::SpiDevice;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use {esp_backtrace as _, esp_println as _};
@@ -32,14 +36,32 @@ async fn hello_world() {
     }
 }
 
-#[allow(
-    clippy::large_stack_frames,
-    reason = "it's not unusual to allocate larger buffers etc. in main"
-)]
-#[esp_rtos::main]
-async fn main(_spawner: Spawner) {
-    // generator version: 1.2.0
+#[derive(Debug, thiserror::Error)]
+enum ApplicationError {
+    #[error("Error setting up SPI")]
+    SetUpSpi(#[from] spi::SetUpError),
+    #[error("Error setting up e-ink display")]
+    SetUpEinkDisplay(
+        eink_display::InitializationError<
+            <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
+        >,
+    ),
+    #[error("Error displaying on e-ink display")]
+    Display(
+        eink_display::DisplayError<
+            <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
+        >,
+    ),
+    #[error("Error setting entering display deep sleep")]
+    EnterDeepSleep(
+        eink_display::EnterDeepSleepError<
+            <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
+        >,
+    ),
+}
 
+/// Just a convenience replacement for main to be able to return errors
+async fn run(_spawner: Spawner) -> Result<(), ApplicationError> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -60,8 +82,9 @@ async fn main(_spawner: Spawner) {
     let serial_clock = peripherals.GPIO8;
     // SPI Master Out Slave In (MOSI)
     let master_out_slave_in = peripherals.GPIO10;
-    // Chip Select (CS)
-    let chip_select = peripherals.GPIO21;
+    let master_in_slave_out = peripherals.GPIO7;
+    // Display Chip Select (CS)
+    let display_chip_select = peripherals.GPIO21;
     // Data/Command (DC)
     let data_command = peripherals.GPIO4;
     // Reset (RST)
@@ -70,42 +93,51 @@ async fn main(_spawner: Spawner) {
     let busy = peripherals.GPIO6;
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
-    let mut display = EinkDisplay::initialize(
+    let sd_card_chip_select = peripherals.GPIO12;
+
+    let (display_spi, _sd_card_spi) = spi::set_up_devices(
         peripherals.SPI2,
         serial_clock,
         master_out_slave_in,
-        chip_select,
+        master_in_slave_out,
         direct_memory_access_channel,
-        reset,
-        data_command,
-        busy,
-    )
-    .await
-    .inspect_err(|_error| error!("Error initializing display"))
-    .expect("Failed to initialize display");
+        display_chip_select,
+        sd_card_chip_select,
+    )?;
+
+    info!("Initializing display");
+
+    let mut display = EinkDisplay::initialize(display_spi, reset, data_command, busy)
+        .await
+        .map_err(ApplicationError::SetUpEinkDisplay)?;
 
     display
         .display(
             eink_display::RefreshMode::Full,
-            &[0xFF; EinkDisplay::BUFFER_SIZE],
+            &[0x00; eink_display::BUFFER_SIZE],
         )
         .await
-        .inspect_err(|error| error!("Error displaying {:?}", defmt::Debug2Format(&error)))
-        .expect("Failed to display");
+        .map_err(ApplicationError::Display)?;
 
     display
         .enter_deep_sleep()
         .await
-        .inspect_err(|error| {
-            error!(
-                "Error starting deep sleep {:?}",
-                defmt::Debug2Format(&error)
-            )
-        })
-        .expect("Failed to start deep sleep");
-
-    // Task test
+        .map_err(ApplicationError::EnterDeepSleep)?;
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
-    info!("COMPLETED");
+
+    Ok(())
+}
+
+#[allow(
+    clippy::large_stack_frames,
+    reason = "it's not unusual to allocate larger buffers etc. in main"
+)]
+#[esp_rtos::main]
+async fn main(spawner: Spawner) {
+    let result = run(spawner).await;
+    if let Err(error) = result {
+        error!("Main failed: {:?}", defmt::Debug2Format(&error));
+    }
+    info!("Main completed");
 }

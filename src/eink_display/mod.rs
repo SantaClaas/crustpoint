@@ -1,21 +1,9 @@
-use crate::eink_display::error::{
-    CreateError, DisplayError, EnterDeepSleepError, InitializationError, InitializeControllerError,
-    RefreshError, SendCommandError, SendDataError, SetRamAreaError, WaitForBusyTimeoutError,
-};
+pub(crate) use crate::eink_display::error::*;
+
 use defmt::info;
 use embassy_time::{Duration, Timer, with_timeout};
-use esp_hal::{
-    Async,
-    dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf},
-    dma_buffers,
-    gpio::{
-        Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin,
-        interconnect::PeripheralOutput,
-    },
-    spi::master::{AnySpi, Config, Instance, Spi, SpiDmaBus},
-    time::Rate,
-};
-
+use embedded_hal_async::spi::SpiDevice;
+use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin};
 mod error;
 
 #[derive(Debug, defmt::Format)]
@@ -61,8 +49,8 @@ enum ControlMode {
     BypassRed = 0x40,
 }
 
-pub(super) struct EinkDisplay<'d> {
-    spi: SpiDmaBus<'d, Async>,
+pub(super) struct EinkDisplay<'d, SPI: SpiDevice> {
+    spi: SPI,
     reset: Output<'d>,
     /// Based on usage this pin is used to select between data and command mode.
     /// When set to low, the pin is in command mode to send commands.
@@ -79,61 +67,27 @@ pub(super) enum RefreshMode {
     HalfRefresh,
 }
 
-impl<'d> EinkDisplay<'d> {
-    const DISPLAY_WIDTH: u16 = 800;
-    const DISPLAY_HEIGHT: u16 = 480;
-    const DISPLAY_WIDTH_BYTES: usize = {
-        // There is no div_exact yet
-        assert!(
-            Self::DISPLAY_WIDTH % 8 == 0,
-            "Display width must be a multiple of 8"
-        );
+const DISPLAY_WIDTH: u16 = 800;
+const DISPLAY_HEIGHT: u16 = 480;
+const DISPLAY_WIDTH_BYTES: usize = {
+    // There is no div_exact yet
+    assert!(
+        DISPLAY_WIDTH % 8 == 0,
+        "Display width must be a multiple of 8"
+    );
 
-        Self::DISPLAY_WIDTH.strict_div(8) as usize
-    };
+    DISPLAY_WIDTH.strict_div(8) as usize
+};
 
-    pub(crate) const BUFFER_SIZE: usize =
-        Self::DISPLAY_WIDTH_BYTES.strict_mul(Self::DISPLAY_HEIGHT as usize);
+pub(crate) const BUFFER_SIZE: usize = DISPLAY_WIDTH_BYTES.strict_mul(DISPLAY_HEIGHT as usize);
 
+impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
     fn new(
-        spi: impl Instance + 'd,
-        serial_clock: impl PeripheralOutput<'d>,
-        master_out_slave_in: impl PeripheralOutput<'d>,
-        chip_select: impl PeripheralOutput<'d>,
-        direct_memory_access_channel: impl DmaChannelFor<AnySpi<'d>>,
+        spi: SPI,
         reset: impl OutputPin + 'd,
         data_command: impl OutputPin + 'd,
         busy: impl InputPin + 'd,
     ) -> Result<Self, CreateError> {
-        // DMA = Direct Memory Access
-        let (receive_buffer, receive_descriptor, transmit_buffer, transmit_descriptors) =
-            dma_buffers!(32_000);
-        let direct_memory_access_receive_buffer = DmaRxBuf::new(receive_descriptor, receive_buffer)
-            .map_err(CreateError::DmaReceiveBuffer)?;
-        let direct_memory_access_transmit_buffer =
-            DmaTxBuf::new(transmit_descriptors, transmit_buffer)
-                .map_err(CreateError::DmaTransmitBuffer)?;
-
-        // Initialize SPI with custom pins
-        let spi = Spi::new(
-            spi,
-            Config::default()
-                .with_frequency(Rate::from_mhz(40))
-                .with_mode(esp_hal::spi::Mode::_0)
-                .with_read_bit_order(esp_hal::spi::BitOrder::MsbFirst), // .with_write_bit_order(esp_hal::spi::BitOrder::MsbFirst)
-        )?
-        .with_sck(serial_clock)
-        .with_mosi(master_out_slave_in)
-        // MISO might be pin 7? https://github.com/juicecultus/ariel-os/blob/a2816b156b632b2633801df45d69c8fe9dde500c/examples/x4-launcher/src/main.rs#L943
-        // .with_miso(todo!("Not defined in XteinkX4 screen spec"))
-        .with_cs(chip_select)
-        .with_dma(direct_memory_access_channel)
-        .with_buffers(
-            direct_memory_access_receive_buffer,
-            direct_memory_access_transmit_buffer,
-        )
-        .into_async();
-
         // Set up GPIO pins
         let reset = Output::new(reset, Level::Low, OutputConfig::default());
         let data_command = Output::new(data_command, Level::High, OutputConfig::default());
@@ -142,7 +96,6 @@ impl<'d> EinkDisplay<'d> {
             InputConfig::default().with_pull(esp_hal::gpio::Pull::Down),
         );
 
-        info!("Size: {}", Self::BUFFER_SIZE);
         Ok(Self {
             spi,
             reset,
@@ -165,26 +118,20 @@ impl<'d> EinkDisplay<'d> {
         info!("Display reset completed");
     }
 
-    async fn send_command(&mut self, command: Command) -> Result<(), SendCommandError> {
+    async fn send_command(&mut self, command: Command) -> Result<(), SendCommandError<SPI::Error>> {
         info!("Sending command: {:?}", command);
         // Set into command mode
         self.data_command.set_low();
-        self.spi
-            .write_async(&[command as u8])
-            .await
-            .map_err(SendCommandError)?;
+        self.spi.write(&[command as u8]).await?;
         info!("Command sent");
         Ok(())
     }
 
-    async fn send_data(&mut self, data: impl AsRef<[u8]>) -> Result<(), SendDataError> {
+    async fn send_data(&mut self, data: &[u8]) -> Result<(), SendDataError<SPI::Error>> {
         info!("Sending data: {:?}", data.as_ref().len());
         // Set into data mode
         self.data_command.set_high();
-        self.spi
-            .write_async(data.as_ref())
-            .await
-            .map_err(SendDataError)?;
+        self.spi.write(data).await?;
         info!("Data sent");
         Ok(())
     }
@@ -202,13 +149,13 @@ impl<'d> EinkDisplay<'d> {
         y: u16,
         width: u16,
         height: u16,
-    ) -> Result<(), SetRamAreaError> {
+    ) -> Result<(), SetRamAreaError<SPI::Error>> {
         // Data entry x increment y decrement???
         const DATA_ENTRY_X_INC_Y_DEC: u8 = 0x01;
 
         //TODO overflow safety
         // Reverse Y coordinate (gates are reversed on this display)
-        let y = Self::DISPLAY_HEIGHT - y - height;
+        let y = DISPLAY_HEIGHT - y - height;
 
         self.send_command(Command::DataEntryMode).await?;
         self.send_data(&[DATA_ENTRY_X_INC_Y_DEC]).await?;
@@ -252,7 +199,7 @@ impl<'d> EinkDisplay<'d> {
         Ok(())
     }
 
-    async fn initialize_controller(&mut self) -> Result<(), InitializeControllerError> {
+    async fn initialize_controller(&mut self) -> Result<(), InitializeControllerError<SPI::Error>> {
         info!("Initializing SSD1677 controller");
 
         // Soft reset
@@ -277,9 +224,9 @@ impl<'d> EinkDisplay<'d> {
         // Driver output control: set display height (480) and scan direction
         self.send_command(Command::DriverOutputControl).await?;
         //TODO safer casting
-        self.send_data(&[((Self::DISPLAY_HEIGHT - 1) % 256) as u8])
+        self.send_data(&[((DISPLAY_HEIGHT - 1) % 256) as u8])
             .await?;
-        self.send_data(&[((Self::DISPLAY_HEIGHT - 1) / 256) as u8])
+        self.send_data(&[((DISPLAY_HEIGHT - 1) / 256) as u8])
             .await?;
         self.send_data(&[0x02]).await?;
 
@@ -288,7 +235,7 @@ impl<'d> EinkDisplay<'d> {
         self.send_data(&[0x01]).await?;
 
         // Set up full screen RAM area
-        self.set_ram_area(0, 0, Self::DISPLAY_WIDTH, Self::DISPLAY_HEIGHT)
+        self.set_ram_area(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
             .await?;
 
         info!("Clearing RAM buffers");
@@ -307,26 +254,13 @@ impl<'d> EinkDisplay<'d> {
     }
 
     pub(super) async fn initialize(
-        spi: impl Instance + 'd,
-        serial_clock: impl PeripheralOutput<'d>,
-        master_out_slave_in: impl PeripheralOutput<'d>,
-        chip_select: impl PeripheralOutput<'d>,
-        direct_memory_access_channel: impl DmaChannelFor<AnySpi<'d>>,
+        spi: SPI,
         reset: impl OutputPin + 'd,
         data_command: impl OutputPin + 'd,
         busy: impl InputPin + 'd,
-    ) -> Result<Self, InitializationError> {
+    ) -> Result<Self, InitializationError<SPI::Error>> {
         info!("Initializing e-ink display driver");
-        let mut this = Self::new(
-            spi,
-            serial_clock,
-            master_out_slave_in,
-            chip_select,
-            direct_memory_access_channel,
-            reset,
-            data_command,
-            busy,
-        )?;
+        let mut this = Self::new(spi, reset, data_command, busy)?;
 
         this.reset().await;
 
@@ -341,7 +275,7 @@ impl<'d> EinkDisplay<'d> {
         &mut self,
         mode: RefreshMode,
         turn_screen_off: bool,
-    ) -> Result<(), RefreshError> {
+    ) -> Result<(), RefreshError<SPI::Error>> {
         // Configure Display Update Control 1
         self.send_command(Command::DisplayUpdateControl1).await?;
         // Configure buffer comparison mode
@@ -425,15 +359,15 @@ impl<'d> EinkDisplay<'d> {
     pub(crate) async fn display(
         &mut self,
         mut refresh_mode: RefreshMode,
-        frame_buffer: &[u8; EinkDisplay::BUFFER_SIZE],
-    ) -> Result<(), DisplayError> {
+        frame_buffer: &[u8],
+    ) -> Result<(), DisplayError<SPI::Error>> {
         if !self.is_screen_on {
             // Force half refresh if screen is off
             refresh_mode = RefreshMode::HalfRefresh;
         }
 
         // Set up full screen RAM area
-        self.set_ram_area(0, 0, Self::DISPLAY_WIDTH, Self::DISPLAY_HEIGHT)
+        self.set_ram_area(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
             .await?;
 
         match refresh_mode {
@@ -459,7 +393,7 @@ impl<'d> EinkDisplay<'d> {
         Ok(())
     }
 
-    pub(crate) async fn enter_deep_sleep(&mut self) -> Result<(), EnterDeepSleepError> {
+    pub(crate) async fn enter_deep_sleep(&mut self) -> Result<(), EnterDeepSleepError<SPI::Error>> {
         info!("Preparing display to enter deep sleep");
         // First, power down the display properly
         // This shuts down the analog power rails and clock
