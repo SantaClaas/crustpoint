@@ -1,13 +1,9 @@
 use embassy_time::TimeoutError;
 use embedded_hal::spi::Error;
-use esp_hal::{dma::DmaBufError, spi};
+use esp_hal::spi;
 
 #[derive(Debug, thiserror::Error, defmt::Format)]
 pub(crate) enum CreateError {
-    #[error("Failed to create direct memory access (DMA) receive channel buffer")]
-    DmaReceiveBuffer(DmaBufError),
-    #[error("Failed to create direct memory access (DMA) transmit channel buffer")]
-    DmaTransmitBuffer(DmaBufError),
     #[error("Failed to create SPI bus")]
     SpiBus(#[from] spi::master::ConfigError),
 }

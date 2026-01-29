@@ -10,14 +10,16 @@
 mod eink_display;
 mod spi;
 
-use core::error;
-
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use embedded_hal_async::spi::SpiDevice;
-use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{self, Input, InputConfig};
+use esp_hal::peripherals::{GPIO3, LPWR};
+use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
+use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
+use esp_hal::system::Cpu;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::{clock::CpuClock, rtc_cntl::Rtc};
 use {esp_backtrace as _, esp_println as _};
 
 use crate::eink_display::EinkDisplay;
@@ -58,14 +60,65 @@ enum ApplicationError {
             <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
         >,
     ),
+
+    #[error("Error spawning task")]
+    Spawn(#[from] embassy_executor::SpawnError),
+}
+
+#[embassy_executor::task]
+async fn handle_power_button(
+    mut pin: GPIO3<'static>,
+    lpwr: LPWR<'static>,
+    mut eink_display: EinkDisplay<'static, spi::Device<'static>>,
+) {
+    loop {
+        let borrowed = pin.reborrow();
+
+        let mut power_button = Input::new(borrowed, InputConfig::default());
+        // Low = pressed, High = released
+        power_button.wait_for_low().await;
+
+        info!("Power button pressed. Turning off");
+
+        let Err(error) = eink_display.enter_deep_sleep().await else {
+            break;
+        };
+
+        error!(
+            "Failed to enter deep sleep: {:?}",
+            defmt::Debug2Format(&error)
+        );
+    }
+
+    // Just to be safe and avoid bricking the device when we accidentally run the deep sleep after reboot
+    Timer::after_secs(5).await;
+    info!("Entering deep sleep");
+
+    let wakeup_pins: &mut [(&mut dyn gpio::RtcPinWithResistors, WakeupLevel)] =
+        &mut [(&mut pin, WakeupLevel::Low)];
+
+    let rtcio = RtcioWakeupSource::new(wakeup_pins);
+
+    // LPWR = Low Power Watchdog and Reset? Low Power Wrapper? LowPoWeR? Laser Power?
+    let mut real_time_control = Rtc::new(lpwr);
+    real_time_control.sleep_deep(&[&rtcio]);
 }
 
 /// Just a convenience replacement for main to be able to return errors
-async fn run(_spawner: Spawner) -> Result<(), ApplicationError> {
+async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
+    let reset_reason = reset_reason(Cpu::ProCpu);
+    let wake_reason = wakeup_cause();
+
+    info!(
+        "Reset reason: {:?}; Wakeup reason: {:?}",
+        defmt::Debug2Format(&reset_reason),
+        wake_reason
+    );
+
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
+    // esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
     // COEX needs more RAM - so we've added some more
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
@@ -124,7 +177,11 @@ async fn run(_spawner: Spawner) -> Result<(), ApplicationError> {
         .await
         .map_err(ApplicationError::EnterDeepSleep)?;
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
+    spawner.spawn(handle_power_button(
+        peripherals.GPIO3,
+        peripherals.LPWR,
+        display,
+    ))?;
 
     Ok(())
 }
