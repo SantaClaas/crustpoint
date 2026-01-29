@@ -80,6 +80,20 @@ async fn handle_power_button(
 
         info!("Power button pressed. Turning off");
 
+        if let Err(error) = eink_display
+            .display(
+                eink_display::RefreshMode::Full,
+                &[0x00; eink_display::BUFFER_SIZE],
+            )
+            .await
+        {
+            error!(
+                "Failed to update display before entering deep sleep: {:?}",
+                defmt::Debug2Format(&error)
+            );
+            continue;
+        }
+
         let Err(error) = eink_display.enter_deep_sleep().await else {
             break;
         };
@@ -164,11 +178,12 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         .await
         .map_err(ApplicationError::SetUpEinkDisplay)?;
 
+    let mut frame = [0x00u8; eink_display::BUFFER_SIZE];
+    frame[0..eink_display::BUFFER_SIZE / 2].fill(0xFF);
+    // frame[eink_display::BUFFER_SIZE / 2..].fill(0x00);
+
     display
-        .display(
-            eink_display::RefreshMode::Full,
-            &[0x00; eink_display::BUFFER_SIZE],
-        )
+        .display(eink_display::RefreshMode::Full, &frame)
         .await
         .map_err(ApplicationError::Display)?;
 
