@@ -172,11 +172,6 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         .await
         .map_err(ApplicationError::Display)?;
 
-    display
-        .enter_deep_sleep()
-        .await
-        .map_err(ApplicationError::EnterDeepSleep)?;
-
     spawner.spawn(handle_power_button(
         peripherals.GPIO3,
         peripherals.LPWR,
