@@ -1,6 +1,8 @@
 [target.riscv32imc-unknown-none-elf]
 # Parition table can also be converted to .bin using espflash and set in espflash.toml
-runner = "espflash flash --monitor --chip esp32c3 --log-format defmt --partition-table ./partition-table.csv"
+# You might need to change the --target-app-partition to app0 or app1 depending on which is active.
+# You can find out which partition is active under "Apps" on https://thelastoutpostworkshop.github.io/ESPConnect/
+runner = "espflash flash --monitor --chip esp32c3 --log-format defmt --partition-table ./partition-table.csv --target-app-partition app1"
 
 [env]
 DEFMT_LOG="info"
