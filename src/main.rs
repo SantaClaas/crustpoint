@@ -7,15 +7,17 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+mod button;
 mod eink_display;
 mod spi;
 
+use bt_hci::cmd::info;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::Timer;
-use esp_hal::analog::adc::{Adc, AdcCalLine, AdcConfig, Attenuation};
+use esp_hal::analog::adc::{Adc, AdcCalLine, AdcChannel, AdcConfig, Attenuation};
 use esp_hal::gpio::{self, Input, InputConfig};
-use esp_hal::peripherals::{ADC1, GPIO1, GPIO2, GPIO3, LPWR};
+use esp_hal::peripherals::{ADC1, ADC2, GPIO0, GPIO1, GPIO2, GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
 use esp_hal::system::Cpu;
@@ -23,6 +25,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, rtc_cntl::Rtc};
 use {esp_backtrace as _, esp_println as _};
 
+use crate::button::Button;
 use crate::eink_display::EinkDisplay;
 
 extern crate alloc;
@@ -47,13 +50,6 @@ enum ApplicationError {
             <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
         >,
     ),
-    #[error("Error setting entering display deep sleep")]
-    EnterDeepSleep(
-        eink_display::EnterDeepSleepError<
-            <spi::Device<'static> as embedded_hal_async::spi::ErrorType>::Error,
-        >,
-    ),
-
     #[error("Error spawning task")]
     Spawn(#[from] embassy_executor::SpawnError),
 }
@@ -112,60 +108,7 @@ async fn handle_power_button(
 }
 
 #[embassy_executor::task]
-async fn handle_buttons(adc: ADC1<'static>, button_1: GPIO1<'static>, button_2: GPIO2<'static>) {
-    let mut configuration = AdcConfig::new();
-    let mut pin_1 = configuration
-        .enable_pin_with_cal::<_, AdcCalLine<ADC1<'static>>>(button_1, Attenuation::_11dB);
-    let mut pin_2 = configuration
-        .enable_pin_with_cal::<_, AdcCalLine<ADC1<'static>>>(button_2, Attenuation::_11dB);
-    let mut adc = Adc::new(adc, configuration).into_async();
-
-    /// Measured values and rough midway points
-    /// Midway points:     ~2850 ~2300 ~1550 ~550
-    /// Recorded values: 3087, 2629, 2013, 1117, 4
-    const PIN_1_RANGES: [u16; 5] = [2850, 2300, 1550, 550, u16::MIN];
-
-    enum Pin {
-        One,
-        Two,
-    }
-
-    /// Measured values and rough midway points
-    /// Midway points:               ~2350  ~850
-    /// Recorded values:            3087, 1670, 4
-    const PIN_2_RANGES: [u16; 3] = [2350, 850, u16::MIN];
-    fn get_button_number(pin_value: u16, ranges: &[u16], pin: Pin) -> Option<u8> {
-        let number_of_buttons: u8 = match pin {
-            Pin::One => 4,
-            Pin::Two => 2,
-        };
-
-        for button_number in 0..number_of_buttons {
-            let start = ranges[usize::from(button_number) + 1];
-            let end = ranges[usize::from(button_number)];
-            // if (start..end).contains(&pin_value) {
-            if start < pin_value && pin_value <= end {
-                return Some(button_number);
-            }
-        }
-
-        None
-    }
-
-    loop {
-        let value_1 = adc.read_oneshot(&mut pin_1).await;
-        let button = get_button_number(value_1, &PIN_1_RANGES, Pin::One);
-        let value_2 = adc.read_oneshot(&mut pin_2).await;
-        let button_2 = get_button_number(value_2, &PIN_2_RANGES, Pin::Two);
-
-        info!(
-            "Button 1: {:?} {}, Button 2: {:?} {}",
-            button, value_1, button_2, value_2
-        );
-
-        Timer::after_secs(1).await;
-    }
-}
+async fn handle_battery(adc: ADC2<'static>, pin: GPIO0<'static>) {}
 
 /// Just a convenience replacement for main to be able to return errors
 async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
@@ -208,13 +151,11 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     // Busy
     let busy = peripherals.GPIO6;
 
+    // Battery
+    let battery_adc = peripherals.GPIO0.adc_channel();
+    info!("ADC channel for battery: {:?}", battery_adc);
     // Buttons
-
-    spawner.spawn(handle_buttons(
-        peripherals.ADC1,
-        peripherals.GPIO1,
-        peripherals.GPIO2,
-    ))?;
+    let mut button = Button::new(peripherals.ADC1, peripherals.GPIO1, peripherals.GPIO2);
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
     let sd_card_chip_select = peripherals.GPIO12;
@@ -249,6 +190,11 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         peripherals.LPWR,
         display,
     ))?;
+
+    loop {
+        button.poll().await;
+        Timer::after_secs(1).await;
+    }
 
     Ok(())
 }
