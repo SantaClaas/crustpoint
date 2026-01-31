@@ -136,9 +136,8 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
         Ok(())
     }
 
-    async fn wait_for_busy(&mut self) -> Result<(), WaitForBusyTimeoutError> {
-        info!("Waiting for low. Current: {}", self.busy.level());
-        with_timeout(Duration::from_millis(100_000), self.busy.wait_for_low())
+    async fn wait_for_idle(&mut self) -> Result<(), WaitForBusyTimeoutError> {
+        with_timeout(Duration::from_secs(10), self.busy.wait_for_low())
             .await
             .map_err(WaitForBusyTimeoutError)
     }
@@ -204,7 +203,7 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
 
         // Soft reset
         self.send_command(Command::SoftReset).await?;
-        self.wait_for_busy().await?;
+        self.wait_for_idle().await?;
 
         // Temperature sensor control (internal)
         const TEMPERATURE_SENSOR_INTERNAL: u8 = 0x80;
@@ -242,12 +241,12 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
         // Auto write BW RAM
         self.send_command(Command::AutoWriteBwRam).await?;
         self.send_data(&[0xF7]).await?;
-        self.wait_for_busy().await?;
+        self.wait_for_idle().await?;
 
         // Auto write Red RAM
         self.send_command(Command::AutoWriteRedRam).await?;
         self.send_data(&[0xF7]).await?;
-        self.wait_for_busy().await?;
+        self.wait_for_idle().await?;
 
         info!("SSD1677 controller initialized");
         Ok(())
@@ -351,7 +350,7 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
         self.send_command(Command::MasterActivation).await?;
 
         // Wait for display to finish updating
-        self.wait_for_busy().await?;
+        self.wait_for_idle().await?;
 
         Ok(())
     }
@@ -407,7 +406,7 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
             self.send_data(&[0b0000_0011]).await?;
 
             // Wait for the power-down sequence to complete
-            self.wait_for_busy().await?;
+            self.wait_for_idle().await?;
 
             self.is_screen_on = false;
         }
