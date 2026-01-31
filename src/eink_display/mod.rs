@@ -1,10 +1,14 @@
+use core::{convert::Infallible, ops::RangeInclusive};
+
 pub(crate) use crate::eink_display::error::*;
+use crate::eink_display::frame::Frame;
 
 use defmt::info;
 use embassy_time::{Duration, Timer, with_timeout};
 use embedded_hal_async::spi::SpiDevice;
 use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin};
 mod error;
+mod frame;
 
 #[derive(Debug, defmt::Format)]
 #[repr(u8)]
@@ -49,7 +53,10 @@ enum ControlMode {
     BypassRed = 0x40,
 }
 
-pub(super) struct EinkDisplay<'d, SPI: SpiDevice> {
+pub(super) struct EinkDisplay<'d, SPI>
+where
+    SPI: SpiDevice,
+{
     spi: SPI,
     reset: Output<'d>,
     /// Based on usage this pin is used to select between data and command mode.
@@ -69,17 +76,6 @@ pub(super) enum RefreshMode {
 
 const DISPLAY_WIDTH: u16 = 800;
 const DISPLAY_HEIGHT: u16 = 480;
-const DISPLAY_WIDTH_BYTES: usize = {
-    // There is no div_exact yet
-    assert!(
-        DISPLAY_WIDTH % 8 == 0,
-        "Display width must be a multiple of 8"
-    );
-
-    DISPLAY_WIDTH.strict_div(8) as usize
-};
-
-pub(crate) const BUFFER_SIZE: usize = DISPLAY_WIDTH_BYTES.strict_mul(DISPLAY_HEIGHT as usize);
 
 impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
     fn new(
@@ -358,7 +354,7 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
     pub(crate) async fn display(
         &mut self,
         mut refresh_mode: RefreshMode,
-        frame_buffer: &[u8],
+        frame: &Frame,
     ) -> Result<(), DisplayError<SPI::Error>> {
         if !self.is_screen_on {
             // Force half refresh if screen is off
@@ -375,15 +371,15 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
                 self.send_command(Command::WriteBwRam).await?;
                 self.data_command.set_high();
 
-                self.send_data(frame_buffer).await?;
+                self.send_data(&frame).await?;
             }
             RefreshMode::HalfRefresh | RefreshMode::Full => {
                 // For full refresh, write to both buffers before refresh
                 self.send_command(Command::WriteBwRam).await?;
-                self.send_data(frame_buffer).await?;
+                self.send_data(&frame).await?;
 
                 self.send_command(Command::WriteRedRam).await?;
-                self.send_data(frame_buffer).await?;
+                self.send_data(&frame).await?;
             }
         }
 
