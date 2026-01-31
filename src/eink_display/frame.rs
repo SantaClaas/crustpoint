@@ -40,7 +40,7 @@ impl Frame {
 impl Default for Frame {
     fn default() -> Self {
         Frame {
-            buffer: [0x00; Self::BUFFER_SIZE],
+            buffer: [0b1111_1111; Self::BUFFER_SIZE],
             orientation: Orientation::Portrait,
         }
     }
@@ -60,7 +60,8 @@ impl OriginDimensions for Frame {
     }
 }
 
-enum DrawError {
+#[derive(defmt::Format)]
+pub(crate) enum DrawError {
     /// If more details about the error are needed at runtime, then add them
     OutOfBounds,
 }
@@ -100,10 +101,10 @@ impl DrawTarget for Frame {
             let bit_index = 7 - x_hardware % 8;
 
             self.buffer[index] = match color {
-                // E-Ink light is not charged = white
-                BinaryColor::On => self.buffer[index] & !(1 << bit_index),
                 // E-Ink dark is charged = black
                 BinaryColor::Off => self.buffer[index] | (1 << bit_index),
+                // E-Ink light is not charged = white
+                BinaryColor::On => self.buffer[index] & !(1 << bit_index),
             };
         }
         Ok(())

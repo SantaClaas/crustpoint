@@ -14,9 +14,14 @@ mod spi;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::Timer;
-use esp_hal::analog::adc::AdcChannel;
+use embedded_graphics::Drawable;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::prelude::Point;
+use embedded_graphics::text::Text;
 use esp_hal::gpio::{self, Input, InputConfig};
-use esp_hal::peripherals::{ADC2, GPIO0, GPIO3, LPWR};
+use esp_hal::peripherals::{GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
 use esp_hal::system::Cpu;
@@ -24,7 +29,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, rtc_cntl::Rtc};
 use {esp_backtrace as _, esp_println as _};
 
-use crate::eink_display::EinkDisplay;
+use crate::eink_display::{EinkDisplay, Frame};
 use crate::input::Analog;
 
 extern crate alloc;
@@ -68,11 +73,10 @@ async fn handle_power_button(
 
         info!("Power button pressed. Turning off");
 
+        let frame = Frame::default();
+
         if let Err(error) = eink_display
-            .display(
-                eink_display::RefreshMode::Full,
-                &[0x00; eink_display::BUFFER_SIZE],
-            )
+            .display(eink_display::RefreshMode::Full, &frame)
             .await
         {
             error!(
@@ -173,9 +177,13 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         .await
         .map_err(ApplicationError::SetUpEinkDisplay)?;
 
-    let mut frame = [0x00u8; eink_display::BUFFER_SIZE];
-    frame[0..eink_display::BUFFER_SIZE / 2].fill(0x33);
-    // frame[eink_display::BUFFER_SIZE / 2..].fill(0x00);
+    let mut frame = Frame::default();
+
+    let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+    let text = Text::new("Hello, World!", Point::new(0, 20), style);
+    if let Err(error) = text.draw(&mut frame) {
+        error!("Failed to draw text: {:?}", error);
+    }
 
     display
         .display(eink_display::RefreshMode::Full, &frame)

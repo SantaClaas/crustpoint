@@ -1,7 +1,5 @@
-use core::{convert::Infallible, ops::RangeInclusive};
-
 pub(crate) use crate::eink_display::error::*;
-use crate::eink_display::frame::Frame;
+pub(crate) use crate::eink_display::frame::Frame;
 
 use defmt::info;
 use embassy_time::{Duration, Timer, with_timeout};

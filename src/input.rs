@@ -74,9 +74,9 @@ impl<'a> Analog<'a> {
 
     pub(crate) async fn poll(&mut self) {
         let values = self.read_values().await;
-        let button_1 = get_active_button(values.0, &PIN_1_RANGES, Pin::One);
-        let button_2 = get_active_button(values.1, &PIN_2_RANGES, Pin::Two);
-        info!("Battery? {}", values.2);
+        info!("Battery? {}", values.0);
+        let button_1 = get_active_button(values.1, &PIN_1_RANGES, Pin::One);
+        let button_2 = get_active_button(values.2, &PIN_2_RANGES, Pin::Two);
         match (button_1, button_2) {
             (Some(button_1), Some(button_2)) => {
                 info!("Button 1: {}, Button 2: {}", button_1, button_2);
