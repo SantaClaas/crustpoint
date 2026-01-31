@@ -7,17 +7,16 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-mod button;
 mod eink_display;
+mod input;
 mod spi;
 
-use bt_hci::cmd::info;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::Timer;
-use esp_hal::analog::adc::{Adc, AdcCalLine, AdcChannel, AdcConfig, Attenuation};
+use esp_hal::analog::adc::AdcChannel;
 use esp_hal::gpio::{self, Input, InputConfig};
-use esp_hal::peripherals::{ADC1, ADC2, GPIO0, GPIO1, GPIO2, GPIO3, LPWR};
+use esp_hal::peripherals::{ADC2, GPIO0, GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
 use esp_hal::system::Cpu;
@@ -25,8 +24,8 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, rtc_cntl::Rtc};
 use {esp_backtrace as _, esp_println as _};
 
-use crate::button::Button;
 use crate::eink_display::EinkDisplay;
+use crate::input::Analog;
 
 extern crate alloc;
 
@@ -107,9 +106,6 @@ async fn handle_power_button(
     real_time_control.sleep_deep(&[&rtcio]);
 }
 
-#[embassy_executor::task]
-async fn handle_battery(adc: ADC2<'static>, pin: GPIO0<'static>) {}
-
 /// Just a convenience replacement for main to be able to return errors
 async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     let reset_reason = reset_reason(Cpu::ProCpu);
@@ -151,11 +147,12 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     // Busy
     let busy = peripherals.GPIO6;
 
-    // Battery
-    let battery_adc = peripherals.GPIO0.adc_channel();
-    info!("ADC channel for battery: {:?}", battery_adc);
-    // Buttons
-    let mut button = Button::new(peripherals.ADC1, peripherals.GPIO1, peripherals.GPIO2);
+    let mut analog = Analog::new(
+        peripherals.ADC1,
+        peripherals.GPIO0,
+        peripherals.GPIO1,
+        peripherals.GPIO2,
+    );
 
     let direct_memory_access_channel = peripherals.DMA_CH0;
     let sd_card_chip_select = peripherals.GPIO12;
@@ -177,7 +174,7 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         .map_err(ApplicationError::SetUpEinkDisplay)?;
 
     let mut frame = [0x00u8; eink_display::BUFFER_SIZE];
-    frame[0..eink_display::BUFFER_SIZE / 2].fill(0xFF);
+    frame[0..eink_display::BUFFER_SIZE / 2].fill(0x33);
     // frame[eink_display::BUFFER_SIZE / 2..].fill(0x00);
 
     display
@@ -192,7 +189,7 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     ))?;
 
     loop {
-        button.poll().await;
+        analog.poll().await;
         Timer::after_secs(1).await;
     }
 

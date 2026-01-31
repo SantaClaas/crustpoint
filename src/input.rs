@@ -1,8 +1,10 @@
+//! Reads analog values from GPIO pins. These values are used to determine the state of buttons and battery level.
+
 use defmt::info;
 use esp_hal::{
     Async,
     analog::adc::{Adc, AdcCalLine, AdcConfig, AdcPin, Attenuation},
-    peripherals::{ADC1, GPIO1, GPIO2},
+    peripherals::{ADC1, GPIO0, GPIO1, GPIO2},
 };
 
 /// Measured values and rough midway points
@@ -37,17 +39,20 @@ fn get_active_button(pin_value: u16, ranges: &[u16], pin: Pin) -> Option<u8> {
     None
 }
 
-pub(crate) struct Button<'a> {
+pub(crate) struct Analog<'a> {
     adc: Adc<'a, ADC1<'a>, Async>,
     pin: (
+        AdcPin<GPIO0<'a>, ADC1<'a>, AdcCalLine<ADC1<'a>>>,
         AdcPin<GPIO1<'a>, ADC1<'a>, AdcCalLine<ADC1<'a>>>,
         AdcPin<GPIO2<'a>, ADC1<'a>, AdcCalLine<ADC1<'a>>>,
     ),
 }
 
-impl<'a> Button<'a> {
-    pub(crate) fn new(adc: ADC1<'a>, pin_1: GPIO1<'a>, pin_2: GPIO2<'a>) -> Self {
+impl<'a> Analog<'a> {
+    pub(crate) fn new(adc: ADC1<'a>, pin_0: GPIO0<'a>, pin_1: GPIO1<'a>, pin_2: GPIO2<'a>) -> Self {
         let mut configuration = AdcConfig::new();
+        let pin_0 = configuration
+            .enable_pin_with_cal::<_, AdcCalLine<ADC1<'static>>>(pin_0, Attenuation::_11dB);
         let pin_1 = configuration
             .enable_pin_with_cal::<_, AdcCalLine<ADC1<'static>>>(pin_1, Attenuation::_11dB);
         let pin_2 = configuration
@@ -56,20 +61,22 @@ impl<'a> Button<'a> {
 
         Self {
             adc,
-            pin: (pin_1, pin_2),
+            pin: (pin_0, pin_1, pin_2),
         }
     }
 
-    async fn read_values(&mut self) -> (u16, u16) {
+    async fn read_values(&mut self) -> (u16, u16, u16) {
         let value_1 = self.adc.read_oneshot(&mut self.pin.0).await;
         let value_2 = self.adc.read_oneshot(&mut self.pin.1).await;
-        (value_1, value_2)
+        let value_3 = self.adc.read_oneshot(&mut self.pin.2).await;
+        (value_1, value_2, value_3)
     }
 
     pub(crate) async fn poll(&mut self) {
         let values = self.read_values().await;
         let button_1 = get_active_button(values.0, &PIN_1_RANGES, Pin::One);
         let button_2 = get_active_button(values.1, &PIN_2_RANGES, Pin::Two);
+        info!("Battery? {}", values.2);
         match (button_1, button_2) {
             (Some(button_1), Some(button_2)) => {
                 info!("Button 1: {}, Button 2: {}", button_1, button_2);
@@ -87,7 +94,7 @@ impl<'a> Button<'a> {
     }
 }
 
-impl<'a> Future for Button<'a> {
+impl<'a> Future for Analog<'a> {
     type Output = ();
 
     fn poll(
