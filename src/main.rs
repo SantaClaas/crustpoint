@@ -10,6 +10,7 @@
 mod eink_display;
 mod input;
 mod spi;
+mod storage;
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
@@ -20,6 +21,9 @@ use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::Point;
 use embedded_graphics::text::Text;
+use embedded_hal_async::delay::DelayNs;
+use embedded_sdmmc::{SdCard, VolumeManager};
+use esp_hal::delay::Delay;
 use esp_hal::gpio::{self, Input, InputConfig};
 use esp_hal::peripherals::{GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
@@ -107,6 +111,7 @@ async fn handle_power_button(
 
     // LPWR = Low Power Watchdog and Reset? Low Power Wrapper? LowPoWeR? Laser Power?
     let mut real_time_control = Rtc::new(lpwr);
+    let current_time =  real_time_control.current_time_us();
     real_time_control.sleep_deep(&[&rtcio]);
 }
 
@@ -161,7 +166,7 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     let direct_memory_access_channel = peripherals.DMA_CH0;
     let sd_card_chip_select = peripherals.GPIO12;
 
-    let (display_spi, _sd_card_spi) = spi::set_up_devices(
+    let (display_spi, sd_card_spi) = spi::set_up_devices(
         peripherals.SPI2,
         serial_clock,
         master_out_slave_in,
@@ -170,6 +175,12 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         display_chip_select,
         sd_card_chip_select,
     )?;
+
+    info!("Initializing SD card");
+
+    let sd_card = SdCard::new(sd_card_spi, embassy_time::Delay);
+
+    let mut volume_manager = VolumeManager::new(sd_card, )
 
     info!("Initializing display");
 
