@@ -31,14 +31,14 @@ pub(crate) enum InitializeControllerError<E: Error> {
     #[error("Failed to send data")]
     SendData(#[from] SendDataError<E>),
     #[error("Timed out waiting for busy")]
-    WaitForBusy(#[from] WaitForBusyTimeoutError),
+    WaitForIdle(#[from] WaitForIdleTimeoutError),
     #[error("Failed to set RAM area")]
     SetRamArea(#[from] SetRamAreaError<E>),
 }
 
 #[derive(Debug, thiserror::Error, defmt::Format)]
 #[error("Timeout waiting for busy")]
-pub(crate) struct WaitForBusyTimeoutError(pub(super) TimeoutError);
+pub(crate) struct WaitForIdleTimeoutError(pub(super) TimeoutError);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InitializationError<E: Error> {
@@ -55,7 +55,7 @@ pub(crate) enum RefreshError<E: Error> {
     #[error("Failed to send data")]
     SendData(#[from] SendDataError<E>),
     #[error("Failed to wait for busy")]
-    WaitForBusy(#[from] WaitForBusyTimeoutError),
+    WaitForIdle(#[from] WaitForIdleTimeoutError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,5 +77,5 @@ pub(crate) enum EnterDeepSleepError<E: Error> {
     #[error("Failed to send data")]
     SendData(#[from] SendDataError<E>),
     #[error("Failed to wait for busy")]
-    WaitForBusy(#[from] WaitForBusyTimeoutError),
+    WaitForIdle(#[from] WaitForIdleTimeoutError),
 }

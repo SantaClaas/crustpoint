@@ -12,18 +12,19 @@ mod input;
 mod spi;
 mod storage;
 
+use crate::eink_display::{EinkDisplay, Frame, frame};
+use crate::input::Analog;
+use crate::storage::Storage;
+use alloc::string::ToString;
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_time::Timer;
+use embassy_time::{Instant, Timer};
 use embedded_graphics::Drawable;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::prelude::Point;
+use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use embedded_hal_async::delay::DelayNs;
-use embedded_sdmmc::{SdCard, VolumeManager};
-use esp_hal::delay::Delay;
 use esp_hal::gpio::{self, Input, InputConfig};
 use esp_hal::peripherals::{GPIO3, LPWR};
 use esp_hal::rtc_cntl::sleep::{RtcioWakeupSource, WakeupLevel};
@@ -32,9 +33,6 @@ use esp_hal::system::Cpu;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, rtc_cntl::Rtc};
 use {esp_backtrace as _, esp_println as _};
-
-use crate::eink_display::{EinkDisplay, Frame};
-use crate::input::Analog;
 
 extern crate alloc;
 
@@ -60,6 +58,8 @@ enum ApplicationError {
     ),
     #[error("Error spawning task")]
     Spawn(#[from] embassy_executor::SpawnError),
+    #[error("Error drawing")]
+    Draw(frame::DrawError),
 }
 
 #[embassy_executor::task]
@@ -111,7 +111,7 @@ async fn handle_power_button(
 
     // LPWR = Low Power Watchdog and Reset? Low Power Wrapper? LowPoWeR? Laser Power?
     let mut real_time_control = Rtc::new(lpwr);
-    let current_time =  real_time_control.current_time_us();
+
     real_time_control.sleep_deep(&[&rtcio]);
 }
 
@@ -178,9 +178,10 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
 
     info!("Initializing SD card");
 
-    let sd_card = SdCard::new(sd_card_spi, embassy_time::Delay);
-
-    let mut volume_manager = VolumeManager::new(sd_card, )
+    let storage = Storage::new(sd_card_spi);
+    if let Err(error) = storage.debug_files().await {
+        error!("Failed to debug files: {:?}", error);
+    }
 
     info!("Initializing display");
 
@@ -190,16 +191,18 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
 
     let mut frame = Frame::default();
 
+    // Draw the image with the top left corner at (10, 20) by wrapping it in
+    // an embedded-graphics `Image`.
     let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-    let text = Text::new("Hello, World!", Point::new(0, 20), style);
-    if let Err(error) = text.draw(&mut frame) {
-        error!("Failed to draw text: {:?}", error);
-    }
+    // let text = Text::new("Hello, World!", Point::new(0, 20), style);
+    // if let Err(error) = text.draw(&mut frame) {
+    //     error!("Failed to draw text: {:?}", error);
+    // }
 
-    display
-        .display(eink_display::RefreshMode::Full, &frame)
-        .await
-        .map_err(ApplicationError::Display)?;
+    // display
+    //     .display(eink_display::RefreshMode::Full, &frame)
+    //     .await
+    //     .map_err(ApplicationError::Display)?;
 
     spawner.spawn(handle_power_button(
         peripherals.GPIO3,
@@ -207,12 +210,34 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
         display,
     ))?;
 
+    let start = Instant::now();
+    let mut y = 20;
     loop {
-        analog.poll().await;
-        Timer::after_secs(1).await;
-    }
+        let value = analog.poll().await;
+        let elapsed = start.elapsed().as_micros();
+        let result = storage.write_log(elapsed, value).await;
+        if let Err(error) = result {
+            error!("Failed to write log: {:?}", error);
+        }
 
-    Ok(())
+        let ellapsed = elapsed.to_string();
+        // Print to display
+        let next_position = Text::new(&ellapsed, Point::new(0, y), style)
+            .draw(&mut frame)
+            .map_err(ApplicationError::Draw)?;
+        let next_position = Text::new(",", next_position, style)
+            .draw(&mut frame)
+            .map_err(ApplicationError::Draw)?;
+        let _next_position = Text::new(&value.to_string(), next_position, style)
+            .draw(&mut frame)
+            .map_err(ApplicationError::Draw)?;
+        y += 20;
+        if y > 480 {
+            y = 20;
+        }
+
+        Timer::after_secs(5).await;
+    }
 }
 
 #[allow(

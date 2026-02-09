@@ -72,7 +72,7 @@ impl<'a> Analog<'a> {
         (value_1, value_2, value_3)
     }
 
-    pub(crate) async fn poll(&mut self) {
+    pub(crate) async fn poll(&mut self) -> u16 {
         let values = self.read_values().await;
         info!("Battery? {}", values.0);
         let button_1 = get_active_button(values.1, &PIN_1_RANGES, Pin::One);
@@ -91,6 +91,9 @@ impl<'a> Analog<'a> {
                 info!("No button pressed");
             }
         }
+
+        // Battery level
+        values.0
     }
 }
 

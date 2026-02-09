@@ -6,7 +6,7 @@ use embassy_time::{Duration, Timer, with_timeout};
 use embedded_hal_async::spi::SpiDevice;
 use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin};
 mod error;
-mod frame;
+pub(crate) mod frame;
 
 #[derive(Debug, defmt::Format)]
 #[repr(u8)]
@@ -130,10 +130,10 @@ impl<'d, SPI: SpiDevice> EinkDisplay<'d, SPI> {
         Ok(())
     }
 
-    async fn wait_for_idle(&mut self) -> Result<(), WaitForBusyTimeoutError> {
+    async fn wait_for_idle(&mut self) -> Result<(), WaitForIdleTimeoutError> {
         with_timeout(Duration::from_secs(10), self.busy.wait_for_low())
             .await
-            .map_err(WaitForBusyTimeoutError)
+            .map_err(WaitForIdleTimeoutError)
     }
 
     async fn set_ram_area(

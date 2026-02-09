@@ -60,7 +60,7 @@ impl OriginDimensions for Frame {
     }
 }
 
-#[derive(defmt::Format)]
+#[derive(defmt::Format, Debug)]
 pub(crate) enum DrawError {
     /// If more details about the error are needed at runtime, then add them
     OutOfBounds,
