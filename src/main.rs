@@ -20,8 +20,8 @@ use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Instant, Timer};
 use embedded_graphics::Drawable;
-use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::{MonoTextStyle, MonoTextStyleBuilder};
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
@@ -179,9 +179,6 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     info!("Initializing SD card");
 
     let storage = Storage::new(sd_card_spi);
-    if let Err(error) = storage.debug_files().await {
-        error!("Failed to debug files: {:?}", error);
-    }
 
     info!("Initializing display");
 
@@ -193,7 +190,12 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
 
     // Draw the image with the top left corner at (10, 20) by wrapping it in
     // an embedded-graphics `Image`.
-    let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_10X20)
+        .text_color(BinaryColor::On)
+        .background_color(BinaryColor::Off)
+        .build();
+    // let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
     // let text = Text::new("Hello, World!", Point::new(0, 20), style);
     // if let Err(error) = text.draw(&mut frame) {
     //     error!("Failed to draw text: {:?}", error);
@@ -204,11 +206,11 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
     //     .await
     //     .map_err(ApplicationError::Display)?;
 
-    spawner.spawn(handle_power_button(
-        peripherals.GPIO3,
-        peripherals.LPWR,
-        display,
-    ))?;
+    // spawner.spawn(handle_power_button(
+    //     peripherals.GPIO3,
+    //     peripherals.LPWR,
+    //     display,
+    // ))?;
 
     let start = Instant::now();
     let mut y = 20;
@@ -232,11 +234,22 @@ async fn run(spawner: Spawner) -> Result<(), ApplicationError> {
             .draw(&mut frame)
             .map_err(ApplicationError::Draw)?;
         y += 20;
-        if y > 480 {
+
+        let refresh_mode = if y >= 800 {
             y = 20;
+            eink_display::RefreshMode::Full
+        } else {
+            eink_display::RefreshMode::Fast
+        };
+
+        if let Err(error) = display.display(refresh_mode, &frame).await {
+            error!(
+                "Failed to display frame: {:?}",
+                defmt::Display2Format(&error)
+            );
         }
 
-        Timer::after_secs(5).await;
+        Timer::after_secs(2).await;
     }
 }
 

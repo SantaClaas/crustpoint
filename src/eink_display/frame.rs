@@ -61,9 +61,15 @@ impl OriginDimensions for Frame {
 }
 
 #[derive(defmt::Format, Debug)]
+pub(crate) enum Axis {
+    X,
+    Y,
+}
+
+#[derive(defmt::Format, Debug)]
 pub(crate) enum DrawError {
-    /// If more details about the error are needed at runtime, then add them
-    OutOfBounds,
+    PointTooLarge { axis: Axis, value: i32 },
+    OutOfBounds { axis: Axis, value: u16, max: u16 },
 }
 
 impl DrawTarget for Frame {
@@ -75,15 +81,33 @@ impl DrawTarget for Frame {
     where
         I: IntoIterator<Item = embedded_graphics::Pixel<Self::Color>>,
     {
-        const X_RANGE: Range<u16> = 0..Frame::WIDTH;
-        const Y_RANGE: Range<u16> = 0..Frame::HEIGHT;
+        const X_RANGE: RangeInclusive<u16> = 0..=Frame::HEIGHT;
+        const Y_RANGE: RangeInclusive<u16> = 0..=Frame::WIDTH;
 
         for Pixel(point, color) in pixels {
-            let x = u16::try_from(point.x).map_err(|_| DrawError::OutOfBounds)?;
-            let y = u16::try_from(point.y).map_err(|_| DrawError::OutOfBounds)?;
+            let x = u16::try_from(point.x).map_err(|_| DrawError::PointTooLarge {
+                axis: Axis::X,
+                value: point.x,
+            })?;
+            let y = u16::try_from(point.y).map_err(|_| DrawError::PointTooLarge {
+                axis: Axis::Y,
+                value: point.y,
+            })?;
 
-            if !X_RANGE.contains(&x) || !Y_RANGE.contains(&y) {
-                return Err(DrawError::OutOfBounds);
+            if !X_RANGE.contains(&x) {
+                return Err(DrawError::OutOfBounds {
+                    axis: Axis::X,
+                    value: x,
+                    max: *X_RANGE.end(),
+                });
+            }
+
+            if !Y_RANGE.contains(&y) {
+                return Err(DrawError::OutOfBounds {
+                    axis: Axis::Y,
+                    value: y,
+                    max: *Y_RANGE.end(),
+                });
             }
 
             // Map to pixel on hardware

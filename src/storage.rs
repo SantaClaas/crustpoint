@@ -1,6 +1,5 @@
 use alloc::string::ToString;
-use defmt::info;
-use embedded_sdmmc::{Continue, LfnBuffer, TimeSource, Timestamp, VolumeIdx, VolumeManager};
+use embedded_sdmmc::{TimeSource, Timestamp, VolumeIdx, VolumeManager};
 
 use crate::spi;
 
@@ -36,31 +35,6 @@ impl<'a> Storage<'a> {
         Self { volume_manager }
     }
 
-    pub(crate) async fn debug_files(&self) -> Result<(), SdCardError> {
-        let volume = self.volume_manager.open_volume(VolumeIdx(0)).await?;
-        let root_directory = volume.open_root_dir()?;
-
-        let mut count = 0;
-        let mut buffer = [0u8; 256];
-        let mut buffer = LfnBuffer::new(&mut buffer);
-        root_directory
-            .iterate_dir_lfn(&mut buffer, |entry, i_dont_know| {
-                count += 1;
-
-                let file_name = core::str::from_utf8(entry.name.base_name());
-                info!(
-                    "Entry: {:?} {}",
-                    defmt::Debug2Format(&file_name),
-                    i_dont_know
-                );
-                Continue::Yes
-            })
-            .await?;
-
-        info!("Total entries: {}", count);
-        Ok(())
-    }
-
     pub(crate) async fn write_log(&self, time: u64, battery_level: u16) -> Result<(), SdCardError> {
         let volume = self.volume_manager.open_volume(VolumeIdx(0)).await?;
         let root_directory = volume.open_root_dir()?;
@@ -76,6 +50,12 @@ impl<'a> Storage<'a> {
         let level = level.as_bytes();
         file.write(level).await?;
         file.write(b"\n").await?;
+
+        file.close().await?;
+
+        root_directory.close()?;
+
+        volume.close().await?;
 
         Ok(())
     }
